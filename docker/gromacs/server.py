@@ -34,7 +34,21 @@ def _run(cmd: list, cwd: str = "/data", timeout: int = 3600) -> dict:
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True,
-            cwd=cwd, timeout=timeout
+            cwd=cwd, timeout=timeout,
+        )
+        return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "stdout": "", "stderr": f"命令超时 ({timeout}s)"}
+    except FileNotFoundError:
+        return {"ok": False, "stdout": "", "stderr": f"命令未找到: {cmd[0]}"}
+
+
+def _run_piped(cmd: list, stdin_text: str, cwd: str = "/data", timeout: int = 3600) -> dict:
+    """在容器内执行命令并通过 stdin 提供输入, 返回 (returncode, stdout, stderr)"""
+    try:
+        r = subprocess.run(
+            cmd, capture_output=True, text=True,
+            cwd=cwd, timeout=timeout, input=stdin_text,
         )
         return {"ok": r.returncode == 0, "stdout": r.stdout, "stderr": r.stderr}
     except subprocess.TimeoutExpired:
@@ -73,7 +87,7 @@ def pdb2gmx(
     stem = Path(input_pdb).stem
     os.makedirs(output_dir, exist_ok=True)
 
-    r = _run([
+    r = _run_piped([
         "gmx", "pdb2gmx",
         "-f", input_pdb,
         "-o", f"{output_dir}/{stem}.gro",
@@ -81,7 +95,7 @@ def pdb2gmx(
         "-ff", force_field,
         "-water", water_model,
         "-ignh",
-    ], cwd=output_dir)
+    ], stdin_text="1\n", cwd=output_dir)
 
     if not r["ok"]:
         return _err(r["stderr"][-500:])
@@ -180,7 +194,7 @@ def add_ions(
     if not r1["ok"]:
         return _err(f"grompp 失败: {r1['stderr'][-300:]}")
 
-    r2 = _run([
+    r2 = _run_piped([
         "gmx", "genion",
         "-s", f"{output_dir}/ions.tpr",
         "-o", f"{output_dir}/neutral.gro",
@@ -189,7 +203,7 @@ def add_ions(
         "-nname", neg_ion,
         "-conc", str(concentration),
         "-neutral",
-    ], cwd=output_dir)
+    ], stdin_text="SOL\n", cwd=output_dir)
     if not r2["ok"]:
         return _err(f"genion 失败: {r2['stderr'][-300:]}")
 
@@ -601,5 +615,91 @@ def analyze_hbonds(
         return _err(str(e))
 
 
+@mcp.tool
+def echo_test(msg: str) -> dict:
+    """Echo test — no subprocess, for debugging MCP"""
+    return {"success": True, "result": {"echo": msg}, "error": None}
+
+
+def _jsonrpc_serve():
+    """Minimal JSON-RPC stdio server — bypass FastMCP's broken tools/call"""
+    import sys
+    tools = {
+        "pdb2gmx": pdb2gmx,
+        "solvate": solvate,
+        "add_ions": add_ions,
+        "energy_minimize": energy_minimize,
+        "run_nvt": run_nvt,
+        "run_npt": run_npt,
+        "production_md": production_md,
+        "analyze_rmsd": analyze_rmsd,
+        "analyze_rmsf": analyze_rmsf,
+        "analyze_hbonds": analyze_hbonds,
+        "echo_test": echo_test,
+    }
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        rid = req.get("id")
+        method = req.get("method", "")
+        params = req.get("params", {})
+
+        if method == "initialize":
+            resp = {
+                "jsonrpc": "2.0", "id": rid,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {"listChanged": True}},
+                    "serverInfo": {"name": "gromacs", "version": "1.0.0"},
+                }
+            }
+        elif method == "notifications/initialized":
+            continue  # no response for notifications
+        elif method == "tools/list":
+            tool_list = []
+            for tname, tfunc in tools.items():
+                tool_list.append({
+                    "name": tname,
+                    "description": (tfunc.__doc__ or "").strip(),
+                    "inputSchema": {"type": "object", "properties": {}, "required": []},
+                })
+            resp = {"jsonrpc": "2.0", "id": rid, "result": {"tools": tool_list}}
+        elif method == "tools/call":
+            tname = params.get("name", "")
+            args = params.get("arguments", {})
+            if tname in tools:
+                try:
+                    result = tools[tname](**args)
+                    resp = {
+                        "jsonrpc": "2.0", "id": rid,
+                        "result": {
+                            "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+                            "isError": not result.get("success", False),
+                        }
+                    }
+                except Exception as e:
+                    resp = {
+                        "jsonrpc": "2.0", "id": rid,
+                        "result": {
+                            "content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)})}],
+                            "isError": True,
+                        }
+                    }
+            else:
+                resp = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"Tool not found: {tname}"}}
+        else:
+            resp = {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"Unknown method: {method}"}}
+
+        sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+
 if __name__ == "__main__":
-    mcp.run()
+    _jsonrpc_serve()
