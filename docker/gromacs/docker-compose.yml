@@ -1,0 +1,20 @@
+# GROMACS MCP Server — 一键启动
+# ================================
+# 用法:
+#   构建镜像:   docker compose build
+#   交互运行:   docker compose run --rm gromacs
+#   挂载数据:   修改 volumes 指向你的数据目录
+
+services:
+  gromacs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      tags:
+        - gromacs-mcp:latest
+        - gromacs-mcp:2024
+    image: gromacs-mcp:latest
+    stdin_open: true        # MCP 通过 stdio 通信, 必须开
+    volumes:
+      - ./data:/data        # 把你的 PDB / 轨迹放在 ./data 下
+    working_dir: /data

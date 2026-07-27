@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# 轨迹 / 数据文件 (不要打进镜像!)
+*.xtc
+*.trr
+*.gro
+*.top
+*.tpr
+*.edr
+*.log
+*.cpt
+*.ndx
+*.xvg
+*.pdb
+
+# 环境
+.env
+.venv/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
