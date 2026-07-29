@@ -1,34 +1,33 @@
+---
 # GROMACS MCP Server — Docker 镜像
 
 [![GROMACS](https://img.shields.io/badge/GROMACS-2024.5-blue)](https://www.gromacs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-green)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-ready-brightgreen)](https://www.docker.com/)
+[![CUDA](https://img.shields.io/badge/CUDA-12.5-76b900)](https://developer.nvidia.com/cuda-toolkit)
 
 **把 GROMACS MD 管线暴露为 MCP 工具接口，Docker 一键部署，供 AI Agent 调用。**
-
-```
-PDB 文件 → pdb2gmx → solvate → add_ions → energy_minimize
-    → NVT → NPT → production_md → RMSD/RMSF/HBonds 分析
-```
 
 ---
 
 ## 内置工具 (MCP Tools)
 
-| 工具 | 说明 |
-|------|------|
-| `pdb2gmx` | PDB → GROMACS 拓扑 (力场: amber99sb-ildn/charmm36/opls-aa) |
-| `solvate` | 加水盒子 (cubic/dodecahedron) |
-| `add_ions` | 加离子中和体系 (NaCl 生理盐浓度) |
-| `energy_minimize` | 最陡下降能量最小化 |
-| `run_nvt` | NVT 恒温恒体积平衡 |
-| `run_npt` | NPT 恒温恒压平衡 |
-| `production_md` | 生产 MD 模拟 (可指定时长) |
-| `analyze_rmsd` | 轨迹 RMSD 分析 (MDAnalysis) |
-| `analyze_rmsf` | 残基 RMSF 柔韧性分析 |
-| `analyze_hbonds` | 氢键数量与 occupancy |
+| 阶段 | 工具 | 说明 |
+|---|---|---|
+| 准备 | `pdb2gmx` | PDB → GROMACS 拓扑文件 |
+| 准备 | `solvate` | 加水盒子 |
+| 准备 | `add_ions` | 加离子中和体系电荷 |
+| 运行 | `energy_minimize` | 能量最小化 (steepest descent) |
+| 运行 | `run_nvt` | NVT 系综平衡 (恒温恒容) |
+| 运行 | `run_npt` | NPT 系综平衡 (恒温恒压) |
+| 运行 | `production_md` | 生产 MD 模拟 (GPU 自动加速) |
+| 分析 | `analyze_rmsd` | 轨迹 RMSD 分析 |
+| 分析 | `analyze_rmsf` | 残基 RMSF 柔性分析 |
+| 分析 | `analyze_hbonds` | 氢键数量及 occupancy 分析 |
+| 调试 | `echo_test` | Echo 测试 |
+| 调试 | `gpu_info` | GPU 可用性检测 |
 
-所有工具返回统一信封: `{"success": bool, "result": ..., "error": ...}`
+**MD 工作流:** `pdb2gmx → solvate → add_ions → energy_minimize → run_nvt → run_npt → production_md → analyze`
 
 ---
 
@@ -36,90 +35,128 @@ PDB 文件 → pdb2gmx → solvate → add_ions → energy_minimize
 
 ### 方式一：预构建镜像（推荐）
 
-从 [GitHub Releases](../../releases) 下载 `gromacs-mcp-v2024.tar`，然后：
-
 ```bash
-docker load -i gromacs-mcp-v2024.tar
-docker run --rm -i -v "$(pwd)/data:/data" gromacs-mcp:latest
-```
+# CPU 版 — 任意机器
+docker pull ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024
 
-### 方式二：自行构建
+# GPU 版 — NVIDIA GPU + nvidia-container-toolkit
+docker pull ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024-gpu
 
-```bash
-# 克隆仓库
-git clone https://github.com/YOUR_USERNAME/gromacs-mcp-docker.git
-cd gromacs-mcp-docker
+┌──────────┬─────────────────────────────┬────────┬───────┬───────────────────────────────────────────────────────┐
+│   Tag    │           GROMACS           │  加速  │ 大小  │                       环境要求                        │
+├──────────┼─────────────────────────────┼────────┼───────┼───────────────────────────────────────────────────────┤
+│ 2024     │ 2024 (CPU)                  │ —      │ ~5 GB │ Docker                                                │
+├──────────┼─────────────────────────────┼────────┼───────┼───────────────────────────────────────────────────────┤
+│ 2024-gpu │ 2024.5 源码编译 (CUDA SM89) │ 10-50x │ ~8 GB │ Docker + NVIDIA 驱动 ≥ 555 + nvidia-container-toolkit │
+└──────────┴─────────────────────────────┴────────┴───────┴───────────────────────────────────────────────────────┘
 
-# 构建并运行
-docker compose build
-docker compose run --rm gromacs
-```
+方式二：自行构建
 
-> **注意**: 如果国内网络无法拉取 Docker Hub 基础镜像，请先在 Docker Desktop 设置中添加镜像加速器。
+git clone https://github.com/jialiangsun873-pixel/enzyme-engineering-agent.git
+cd enzyme-engineering-agent/engine/enzyme_lab/mcp_servers/gromacs
+
+# CPU 版
+docker compose build gromacs
+
+# GPU 版
+docker compose build gromacs-gpu
 
 ---
+使用方法
 
-## 使用方法
+MCP 模式（AI Agent 调用）
 
-### MCP 模式（AI Agent 调用）
+容器通过 stdio 走 MCP JSON-RPC 协议，Agent 工具层直接 docker run -i 通信：
 
-```bash
-docker run --rm -i \
-  -v "/your/data/path:/data" \
-  gromacs-mcp:latest
-```
+# CPU
+docker run --rm -i -v $(pwd)/data:/data ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024
 
-### 交互调试
+# GPU
+docker run --rm -i --gpus all -v $(pwd)/data:/data ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024-gpu
 
-```bash
-docker run --rm -it --entrypoint bash \
-  -v "/your/data/path:/data" \
-  gromacs-mcp:latest
-```
+交互调试
 
-进入容器后可以手动执行 GROMACS 命令：
-```bash
-gmx pdb2gmx -f input.pdb -o protein.gro -p topol.top -ff amber99sb-ildn -water tip3p
-```
+docker run --rm -it --gpus all -v $(pwd)/data:/data \
+  --entrypoint bash ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024-gpu
+
+# 容器内
+gmx --version | grep GPU
+nvidia-smi
+python -c "import MDAnalysis; print('OK')"
 
 ---
+数据挂载
 
-## 数据挂载
+所有输入/输出文件通过 -v 挂载进出容器：
 
-把 PDB 文件放在本地目录（如 `./data`），挂载进容器的 `/data`：
+-v /your/data:/data
 
-```bash
-# 目录结构
-./data/
-  ├── input.pdb          # 你放进去的 PDB
-  ├── topol.top          # pdb2gmx 生成
-  ├── protein.gro
-  ├── em.tpr / em.gro    # 能量最小化
-  ├── nvt.tpr / nvt.gro  # NVT 平衡
-  ├── npt.tpr / npt.gro  # NPT 平衡
-  └── md.xtc / md.tpr    # 生产轨迹
+容器内工作目录为 /data，PDB、GRO、XTC 等文件均在此读写。
+
+---
+环境信息
+
+┌─────────────────────────────┬────────────────────────┬───────────────────────────────────┐
+│            组件             │         CPU 版         │              GPU 版               │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ 基础镜像                    │ continuumio/miniconda3 │ nvidia/cuda:12.5.0-runtime        │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ GROMACS                     │ 2024 (conda-forge)     │ 2024.5 (源码编译, -DGMX_GPU=CUDA) │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ CUDA                        │ —                      │ 12.5, SM 89 (RTX 4070 优化)       │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ Python                      │ 3.12                   │ 3.12                              │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ MDAnalysis                  │ ✅                     │ ✅                                │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ FastMCP                     │ ✅                     │ ✅                                │
+├─────────────────────────────┼────────────────────────┼───────────────────────────────────┤
+│ NumPy / Pandas / Matplotlib │ ✅                     │ ✅                                │
+└─────────────────────────────┴────────────────────────┴───────────────────────────────────┘
+
+---
+与 Enzyme Agency 集成
+
+Enzyme Agency 的计算专家 Agent 自动加载 GROMACS 工具：
+
+Agent 调用 gmx_production_md
+  → mcp_bridge 检测 GPU 镜像可用
+    ├── 存在 → docker run --gpus all gromacs-mcp:2024-gpu   ✅ GPU 加速
+    └── 不存在 → docker run gromacs-mcp:2024                ✅ CPU fallback
+
+Agent 无需感知底层是 CPU 还是 GPU，工具层自动选择最优执行路径。
+
+集群部署
+
+# docker-compose.yml
+services:
+  gromacs:
+    image: ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024
+    stdin_open: true
+    volumes:
+      - /shared/data:/data
+
+  gromacs-gpu:
+    image: ghcr.io/jialiangsun873-pixel/gromacs-mcp:2024-gpu
+    stdin_open: true
+    volumes:
+      - /shared/data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+---
+版本历史
+
+┌───────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│       版本        │                                                 Release                                                 │
+├───────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ v2024 (CPU + GPU) │ GROMACS Release (https://github.com/jialiangsun873-pixel/enzyme-engineering-agent/releases/tag/GROMACS) │
+└───────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+更多镜像: GitHub Packages (https://github.com/jialiangsun873-pixel?tab=packages)
 ```
-
----
-
-## 环境信息
-
-| 组件 | 版本 |
-|------|------|
-| GROMACS | 2024.5 (conda-forge, AVX2_256) |
-| Python | 3.12 |
-| MDAnalysis | 2.10+ |
-| NumPy | 2.x |
-| FastMCP | 3.x |
-
----
-
-## 与 Enzyme Agency 集成
-
-本镜像作为 [Enzyme Agency](https://github.com/YOUR_USERNAME/enzyme-agency) 的 MD 模拟引擎，通过 MCP stdio 协议桥接。
-
-Enzyme Agency 的计算专家 Agent 会自动检测并调用这些 GROMACS 工具进行：
-- 酶-底物 MD 模拟
-- 表面残基筛选
-- 接触频率分析
-- 突变位点建议
