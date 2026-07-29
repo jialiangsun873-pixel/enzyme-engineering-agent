@@ -6,7 +6,7 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-brightgreen)](https://www.docker.com/)
 [![CUDA](https://img.shields.io/badge/CUDA-12.5-76b900)](https://developer.nvidia.com/cuda-toolkit)
 
-**把 GROMACS MD 管线暴露为 MCP 工具接口，Docker 一键部署，供 AI Agent 调用。**
+把 GROMACS MD 管线暴露为 MCP 工具接口，Docker 一键部署，供 AI Agent 调用。
 
 ---
 
